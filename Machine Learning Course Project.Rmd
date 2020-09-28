@@ -1,0 +1,141 @@
+---
+title: "MAchine Learning Course Final Project"
+author: "Peihuan Meng"
+date: "9/25/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
+```
+
+## Synopsis
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit, it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. 
+
+The data used in this project is collected from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. 
+
+The goal of this project is to predict the manner in which they did the exercise. This is the **classe** variable in the training set. We cab use any of the other variables to predict with. We are asked to create a report describing how we built our model, how we used cross validation, what we think the expected out of sample error is, and why we made the choices we did. At the end, we are asked to use our prediction model to predict 20 different test cases.
+
+More information about the data is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+## Exploratory Analysis & Data Clean-up
+
+The data set has 19622 observations and 160 variables (including the outcome variable **classe**).
+
+```{r message=FALSE}
+install.packages("corrplot", repos = "http://cran.cnr.berkeley.edu/")
+install.packages("scales", repos = "http://cran.cnr.berkeley.edu/")
+library(caret)
+library(dplyr)
+library(corrplot)
+library(rattle)
+library(scales)
+```
+
+```{r}
+original <- read.csv(url("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"), na.strings=c("NA","#DIV/0!", ""), colClasses = c("classe" = "factor"))
+validating <- read.csv(url("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"), na.strings=c("NA","#DIV/0!", ""))
+dim(original)
+dim(validating)
+```
+
+A closer look reveals there are a good number of varialbes with a very high percentage of NAs. 
+
+```{r}
+str(original)
+```
+
+We selected those variables whose NA's are less then 50%. Also we notice the first 7 columns are sequence infomation which does not contribute to the outcome. So we exclude them as well from the prediction. 
+
+Also, there are no NAs left, so no need for imputing pre-processing.
+
+```{r}
+threshold <-  nrow(original) / 2
+selectPredictor1 <- original[, colSums(is.na(original)) < threshold]
+dim(selectPredictor1)
+selectPredictor2 <- selectPredictor1[, -c(1:7)]
+dim(selectPredictor2)
+
+any(is.na(selectPredictor2))
+```
+
+We now are left with a data set with `r dim(selectPredictor2)[2]` variables for further analysis.
+
+## Coorelation Analysis
+
+Next we run coorelation analysis between every 2 varialbes excluding the outcome variable to get a sense how coorelated the predictors are. 
+
+```{r fig.height = 8, fig.width = 8}
+corr <- cor(selectPredictor2[, -53])
+diag(corr) <- 0
+corrplot(corr)
+```
+
+The plot indicates quite a number of highly coorelated pairs (dark blue and dark red spots). We print out those with the absolute value of coorelation greater than 0.9 below. 
+
+```{r}
+which(corr > 0.9 | corr < -0.9, arr.ind = T)
+```
+
+In particular, we take a look at `r names(selectPredictor2)[c(1,10)]` to get a sense of the relationship bwtween the 2.
+
+```{r fig.height = 5, fig.width = 8}
+plot(selectPredictor2[,1],selectPredictor2[,10])
+```
+
+## Data Slicing
+
+We slice the data into 75% for the training set and 25% for testing.
+
+```{r}
+inTrain <- createDataPartition(y = selectPredictor2$classe, p=0.75, list=FALSE)
+training <- selectPredictor2[inTrain,]
+testing <- selectPredictor2[-inTrain,]
+```
+
+## Pre-processing
+
+Given the predicotrs are highly coorelated, we next run Principle Component Analysis on the data. As we can see, with 26 components will capture 95% of the variance, while 13 components will capture 80% of the variance. That is 50% less number of components for 15% more variance. We think that is worth of the trade-off and we will go with the 80% 13 components model.
+
+```{r}
+set.seed(2121)
+preProcess(training[, -53], method="pca", thresh=0.95)
+preProcessed <- preProcess(training[, -53], method="pca", thresh=0.80)
+preProcessed
+trainTransformed <- predict(preProcessed, training)
+testTransformed <- predict(preProcessed, testing)
+validateTransformed <- predict(preProcessed, validating)
+```
+
+## Fit a model with Gradient Boosting Machine (GBM) Algorithm
+
+```{r}
+set.seed(2324)
+gbmFit <- train(classe ~ ., data = trainTransformed, method = "gbm", trControl = trainControl(method="cv", number=10, allowParallel=TRUE), verbose = FALSE)
+gbmPredicted <- predict(gbmFit, testTransformed)
+gbmMatrix <- confusionMatrix(gbmPredicted, testTransformed$classe)
+gbmMatrix
+```
+
+With Gradient Boosting Machine, we achieve `r percent(gbmMatrix$overall["Accuracy"])` accuracy. 
+
+## Fit a model with Random Forest Algorithm
+
+```{r}
+set.seed(5662)
+rfFit <- train(classe ~ ., data = trainTransformed, method = "rf", trControl = trainControl(method="cv", number=10, allowParallel=TRUE), verbose = FALSE)
+rfPredicted <- predict(rfFit, testTransformed)
+rfMatrix <- confusionMatrix(rfPredicted, testTransformed$classe)
+rfMatrix
+```
+
+With Random Forest, we achieve `r percent(rfMatrix$overall["Accuracy"])` accuracy, which is `r percent(rfMatrix$overall["Accuracy"] - gbmMatrix$overall["Accuracy"])` better than GBM.
+
+## Prediction with Random Forest
+
+```{r}
+predicted <- predict(rfFit, validateTransformed)
+predicted
+```
+
